@@ -6,8 +6,13 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		9162537C3078FC61007FB4FA /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 9162537B3078FC61007FB4FA /* README.md */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		916253323077B056007FB4FA /* Cannon Diagnostics.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Cannon Diagnostics.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		9162537B3078FC61007FB4FA /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -34,6 +39,7 @@
 			children = (
 				916253343077B056007FB4FA /* Cannon Diagnostics */,
 				916253333077B056007FB4FA /* Products */,
+				9162537B3078FC61007FB4FA /* README.md */,
 			);
 			sourceTree = "<group>";
 		};
@@ -109,6 +115,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9162537C3078FC61007FB4FA /* README.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
