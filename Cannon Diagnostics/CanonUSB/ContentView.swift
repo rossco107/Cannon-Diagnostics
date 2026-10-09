@@ -79,7 +79,7 @@ struct ContentView: View {
                 field("Canon serial (raw)", eosSerial)
                 field("PTP serial number", serialNumber)
                 field("Shots remaining", availableShots)
-                field("Firmware / device version", firmware)
+                field("Firmware", firmware.replacingOccurrences(of: "3-", with: ""))
                 field("Battery", eosBattery)
                 ownerEditor
                 if let ownerStatus {
@@ -230,12 +230,11 @@ struct ContentView: View {
   private func testUSB(_ id: UInt64) {
     isReading = true
     Task {
-      usbTest = await Task.detached(priority: .userInitiated) {
-        CanonUSBAccess.test(registryID: id)
-      }.value
+      usbTest = CanonUSBAccess.test(registryID: id)
       isReading = false
     }
   }
+  
   private func hex(_ value: Int, digits: Int = 4) -> String {
     String(format: "0x%0*X", digits, value)
   }
