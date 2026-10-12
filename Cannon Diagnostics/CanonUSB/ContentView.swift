@@ -23,6 +23,7 @@ struct ContentView: View {
   @State private var dustReport: CanonDustData.Report?
   @State private var editingOwner = false
   @State private var ownerDraft = ""
+  @State private var showDeveloperDiagnostics = false
 
   private var camera: ICCameraDevice? { shared.camera }
   private var deviceInfo: String { shared.deviceInfo }
@@ -36,7 +37,7 @@ struct ContentView: View {
     }
     return "—"
   }
-  private var cameraModel: String { value(after: "Model:", in: deviceInfo) ?? camera?.name ?? "—" }
+  private var cameraModel: String { camera?.name ?? "—" }
   private var manufacturer: String { value(after: "Manufacturer:", in: deviceInfo) ?? "—" }
   private var serialNumber: String { value(after: "Serial:", in: deviceInfo) ?? "—" }
   private var firmware: String { value(after: "Device version:", in: deviceInfo) ?? "—" }
@@ -58,7 +59,12 @@ struct ContentView: View {
     VStack(alignment: .leading, spacing: 14) {
       HStack {
         VStack(alignment: .leading, spacing: 3) {
-          Text(cameraModel == "—" ? "Canon Camera Information" : cameraModel).font(.title2.bold())
+          Text(cameraModel == "—" ? "Canon Camera Information" : cameraModel)
+            .font(.title2.bold())
+            .help("Command-click to toggle developer diagnostics")
+            .onTapGesture {
+              if NSEvent.modifierFlags.contains(.command) { showDeveloperDiagnostics.toggle() }
+            }
           Text("Canon EOS diagnostics via macOS ImageCaptureCore").foregroundStyle(.secondary)
         }
         Spacer()
@@ -98,6 +104,36 @@ struct ContentView: View {
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+            if showDeveloperDiagnostics {
+              GroupBox("Developer Diagnostics") {
+                VStack(alignment: .leading, spacing: 10) {
+                  Text("Read-only Canon EOS property inventory for comparing camera models.")
+                    .font(.caption).foregroundStyle(.secondary)
+                  HStack {
+                    Button("Collect Property Inventory") { shared.inspectDustData() }
+                      .disabled(isReading)
+                    Button("Export Property Inventory…") { shared.exportPropertyInventory() }
+                      .disabled(isReading || shared.dustDiagnostics.isEmpty)
+                    Button("Save Raw EOS Data…") { shared.saveRawDustEvent() }
+                      .disabled(isReading || shared.rawDustEvent == nil)
+                  }
+                  if !shared.rawDustSaveStatus.isEmpty {
+                    Text(shared.rawDustSaveStatus).font(.caption).foregroundStyle(.secondary)
+                  }
+                  if !shared.dustDiagnostics.isEmpty {
+                    ScrollView {
+                      Text(shared.dustDiagnostics)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(height: 210)
+                  }
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+              }
+            }
             GroupBox("Sensor Dust Test") {
               VStack(alignment: .leading, spacing: 10) {
                 Text("Run Dust Delete Data on the camera, then take a new JPEG photograph. Select that JPEG to examine its metadata.")
@@ -136,6 +172,12 @@ struct ContentView: View {
     .frame(minWidth: 720, minHeight: 540)
     .onAppear { shared.start() }
     .onDisappear { shared.stop() }
+    .onChange(of: shared.camera?.name) { _, _ in
+      editingOwner = false
+      selectedJPEG = ""
+      dustReport = nil
+      jpegStatus = "No JPEG selected."
+    }
   }
 
   private var ownerEditor: some View {

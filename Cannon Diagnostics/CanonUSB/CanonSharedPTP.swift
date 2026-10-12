@@ -17,6 +17,7 @@ final class CanonSharedPTP: NSObject, ObservableObject, ICDeviceBrowserDelegate 
   @Published var dustDiagnostics = ""
   private let browser = ICDeviceBrowser()
   private var transaction: UInt32 = 1
+  private var cameraGeneration = 0
   private var dustLines: [String] = []
   @Published private(set) var rawDustEvent: Data?
   @Published var rawDustSaveStatus = ""
@@ -32,18 +33,31 @@ final class CanonSharedPTP: NSObject, ObservableObject, ICDeviceBrowserDelegate 
   func stop() { if browser.isBrowsing { browser.stop() } }
   func deviceBrowser(_ browser: ICDeviceBrowser, didAdd device: ICDevice, moreComing: Bool) {
     guard let camera = device as? ICCameraDevice else { return }
-    if !cameras.contains(where: { $0 === camera }) { cameras.append(camera) }
+    if !cameras.contains(where: { $0 === camera }) {
+      cameras.append(camera)
+      cameraGeneration += 1
+      clearCameraReadings()
+    }
     status = "Camera discovered: \(camera.name ?? "Unknown")"
   }
   func deviceBrowser(_ browser: ICDeviceBrowser, didRemove device: ICDevice, moreGoing: Bool) {
     cameras.removeAll { $0 === device }
+    cameraGeneration += 1
+    clearCameraReadings()
     status = cameras.isEmpty ? "Camera disconnected." : "Camera list updated."
   }
-  func refresh() {
+  private func clearCameraReadings() {
     deviceInfo = ""
     properties = ""
     eosEvents = ""
     ownerStatus = ""
+    dustDiagnostics = ""
+    rawDustEvent = nil
+    rawDustSaveStatus = ""
+  }
+  func refresh() {
+    cameraGeneration += 1
+    clearCameraReadings()
     stop()
     start()
   }
@@ -80,11 +94,13 @@ final class CanonSharedPTP: NSObject, ObservableObject, ICDeviceBrowserDelegate 
   func readCamera() {
     guard !busy else { return }
     busy = true
+    let generation = cameraGeneration
     status = "Reading camera…"
     Task {
       do {
         try await withSession { camera in
           let info = try await execute(camera, 0x1001)
+          guard generation == cameraGeneration else { return }
           deviceInfo = "GetDeviceInfo: \(code(info.0))\n" + describeDeviceInfo(info.1)
           var lines = ["PTP device properties"]
           for prop: UInt16 in [0xD402, 0xD407, 0xD406] {
@@ -93,12 +109,15 @@ final class CanonSharedPTP: NSObject, ObservableObject, ICDeviceBrowserDelegate 
             let value = try await execute(camera, 0x1015, [UInt32(prop)])
             lines.append("GetDevicePropValue \(code(prop)): \(code(value.0)), data bytes: \(preview(value.1))")
           }
+          guard generation == cameraGeneration else { return }
           properties = lines.joined(separator: "\n")
-          eosEvents = await readEOS(camera)
+          let events = await readEOS(camera)
+          guard generation == cameraGeneration else { return }
+          eosEvents = events
         }
-        status = "Camera read complete."
+        if generation == cameraGeneration { status = "Camera read complete." }
       } catch {
-        status = "Read failed: \(error.localizedDescription)"
+        if generation == cameraGeneration { status = "Read failed: \(error.localizedDescription)" }
       }
       busy = false
     }
@@ -136,6 +155,27 @@ final class CanonSharedPTP: NSObject, ObservableObject, ICDeviceBrowserDelegate 
           if let value = parsed.eosSerial { serial = value }
           if let value = parsed.batteryPower { battery = value }
           if parsed.eventCount == 0 { break }
+        }
+        // Some EOS bodies, including the 50D, do not emit every property
+        // in the initial event burst. Request missing values explicitly.
+        for property: UInt32 in [0xD115, 0xD1AF] {
+          if property == 0xD115 && owner != nil { continue }
+          if property == 0xD1AF && serial != nil { continue }
+          let request = try await execute(camera, 0x9127, [property])
+          lines.append(String(format: "Request EOS property 0x%04X: %@", property, code(request.0)))
+          guard request.0 == 0x2001 else { continue }
+          for attempt in 1...4 {
+            let poll = try await execute(camera, 0x9116)
+            lines.append("Property poll #\(attempt): \(code(poll.0)); \(poll.1.count) bytes")
+            guard poll.0 == 0x2001 else { break }
+            let parsed = CanonEOSEventDecoder.parse(poll.1)
+            lines.append(contentsOf: parsed.lines)
+            if let value = parsed.owner { owner = value }
+            if let value = parsed.eosSerial { serial = value }
+            if property == 0xD115 && owner != nil { break }
+            if property == 0xD1AF && serial != nil { break }
+            if parsed.eventCount == 0 { break }
+          }
         }
       }
     } catch { lines.append("EOS diagnostic error: \(error)") }
@@ -200,6 +240,20 @@ final class CanonSharedPTP: NSObject, ObservableObject, ICDeviceBrowserDelegate 
                 for line in records.lines { recordDust(line) }
                 if records.count == 0 { break }
               }
+              // Explicitly request properties which some models omit from initial events.
+              for property: UInt32 in [0xD115, 0xD1AF] {
+                let request = try await execute(camera, 0x9127, [property])
+                recordDust(String(format: "Request EOS property 0x%04X: %@", property, code(request.0)))
+                guard request.0 == 0x2001 else { continue }
+                for attempt in 1...4 {
+                  let poll = try await execute(camera, 0x9116)
+                  recordDust("Requested property poll #\(attempt): \(code(poll.0)); \(poll.1.count) bytes")
+                  guard poll.0 == 0x2001 else { break }
+                  let records = inventoryEOSRecords(poll.1)
+                  for line in records.lines { recordDust(line) }
+                  if records.count == 0 { break }
+                }
+              }
             }
           } catch { recordDust("EOS inventory error: \(error.localizedDescription)") }
           if events {
@@ -221,6 +275,25 @@ final class CanonSharedPTP: NSObject, ObservableObject, ICDeviceBrowserDelegate 
     }
   }
 
+  func exportPropertyInventory() {
+    guard !dustDiagnostics.isEmpty else {
+      rawDustSaveStatus = "Collect the property inventory first."
+      return
+    }
+    let panel = NSSavePanel()
+    panel.title = "Export Canon EOS property inventory"
+    let model = camera?.name?.replacingOccurrences(of: " ", with: "-") ?? "CanonEOS"
+    panel.nameFieldStringValue = "\(model)-Properties.txt"
+    panel.allowedContentTypes = [.plainText]
+    panel.canCreateDirectories = true
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    do {
+      let text = "Camera: \(camera?.name ?? "Disconnected")\n\n" + dustDiagnostics
+      try text.write(to: url, atomically: true, encoding: .utf8)
+      rawDustSaveStatus = "Exported \(url.lastPathComponent)."
+    } catch { rawDustSaveStatus = "Export failed: \(error.localizedDescription)" }
+  }
+
   // Saves the complete first non-empty 0x9116 GetEvent payload, without truncating property values.
   func saveRawDustEvent() {
     guard let data = rawDustEvent else {
@@ -229,7 +302,7 @@ final class CanonSharedPTP: NSObject, ObservableObject, ICDeviceBrowserDelegate 
     }
     let panel = NSSavePanel()
     panel.title = "Save complete EOS event response"
-    panel.nameFieldStringValue = "EOS50D-GetEvent.bin"
+    panel.nameFieldStringValue = "\(camera?.name?.replacingOccurrences(of: " ", with: "-") ?? "CanonEOS")-GetEvent.bin"
     panel.allowedContentTypes = [.data]
     panel.canCreateDirectories = true
     if panel.runModal() == .OK, let url = panel.url {
@@ -341,15 +414,20 @@ final class CanonSharedPTP: NSObject, ObservableObject, ICDeviceBrowserDelegate 
           guard result.0 == 0x2001 else { throw PTPError.message("Camera rejected write: \(code(result.0))") }
           ownerStatus = "Camera accepted owner name; checking readback…"
           let request = try await execute(camera, 0x9127, [0xD115])
+          var verified = false
           if request.0 == 0x2001 {
             for _ in 0..<4 {
               let poll = try await execute(camera, 0x9116)
               guard poll.0 == 0x2001 else { break }
               if let confirmed = CanonEOSEventDecoder.parse(poll.1).owner {
-                ownerStatus = confirmed == name ? "Owner name saved and verified." : "Write accepted; readback was \(confirmed)."
+                verified = confirmed == name
+                ownerStatus = verified ? "Owner name saved and verified." : "Write accepted; readback was \(confirmed)."
                 break
               }
             }
+          }
+          if !verified && ownerStatus == "Camera accepted owner name; checking readback…" {
+            ownerStatus = "Write accepted, but the 50D did not confirm the saved name."
           }
           _ = try? await execute(camera, 0x9115, [0])
           _ = try? await execute(camera, 0x9114, [0])
