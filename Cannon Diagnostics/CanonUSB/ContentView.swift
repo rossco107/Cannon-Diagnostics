@@ -11,24 +11,25 @@
 
 
 import SwiftUI
+import ImageCaptureCore
+import UniformTypeIdentifiers
+import ImageIO
+import AppKit
 
 struct ContentView: View {
-  @State private var devices: [CanonUSBDevice] = []
-  @State private var lastScan = Date()
-  @State private var deviceInfo = ""
-  @State private var properties = ""
-  @State private var eosEvents = ""
-  @State private var usbTest = ""
-  @State private var isReading = false
-  @State private var showDiagnostics = false
+  @StateObject private var shared = CanonSharedPTP()
+  @State private var selectedJPEG = ""
+  @State private var jpegStatus = "No JPEG selected."
+  @State private var dustReport: CanonDustData.Report?
   @State private var editingOwner = false
   @State private var ownerDraft = ""
-  @State private var ownerStatus: String? = nil
 
-  private var camera: CanonUSBDevice? { devices.first }
-  private var ptpInterface: CanonUSBInterface? {
-    camera?.interfaces.first(where: { $0.interfaceClass == 6 })
-  }
+  private var camera: ICCameraDevice? { shared.camera }
+  private var deviceInfo: String { shared.deviceInfo }
+  private var properties: String { shared.properties }
+  private var eosEvents: String { shared.eosEvents }
+  private var isReading: Bool { shared.busy }
+  private var ownerStatus: String? { shared.ownerStatus.isEmpty ? nil : shared.ownerStatus }
   private var shutterCount: String {
     if let match = eosEvents.range(of: #"SHUTTER COUNT CANDIDATE:\s*\d+"#, options: .regularExpression) {
       return String(eosEvents[match]).components(separatedBy: ":").last?.trimmingCharacters(in: .whitespaces) ?? "—"
@@ -58,17 +59,16 @@ struct ContentView: View {
       HStack {
         VStack(alignment: .leading, spacing: 3) {
           Text(cameraModel == "—" ? "Canon Camera Information" : cameraModel).font(.title2.bold())
-          Text("Native USB and Canon EOS diagnostics").foregroundStyle(.secondary)
+          Text("Canon EOS diagnostics via macOS ImageCaptureCore").foregroundStyle(.secondary)
         }
         Spacer()
         if isReading { ProgressView().controlSize(.small) }
-        Button("Refresh") { refresh() }.disabled(isReading)
-        Button("Read Camera") { readCamera() }.disabled(isReading || ptpInterface == nil)
+        Button("Read Camera") { readCamera() }.disabled(isReading || camera == nil)
           .buttonStyle(.borderedProminent)
       }
       Divider()
       if camera == nil {
-        ContentUnavailableView("No Canon camera detected", systemImage: "camera", description: Text("Connect and wake the camera, then select Refresh."))
+        ContentUnavailableView("No Canon camera detected", systemImage: "camera", description: Text("Connect and switch on a Canon camera. It will be detected automatically."))
       } else {
         ScrollView {
           VStack(alignment: .leading, spacing: 18) {
@@ -90,44 +90,52 @@ struct ContentView: View {
               .padding(8)
               .frame(maxWidth: .infinity, alignment: .leading)
             }
-            GroupBox("Connection") {
-              VStack(alignment: .leading, spacing: 9) {
-                field("Status", ptpInterface == nil ? "Camera detected; PTP unavailable" : "Connected via USB")
-                if let camera {
-                  field("Vendor / product ID", "\(hex(camera.vendorID)) / \(hex(camera.productID))")
-                  field("USB location", hex(camera.locationID, digits: 8))
+            HStack(spacing: 6) {
+              Image(systemName: "cable.connector")
+              Text("Connected via ImageCaptureCore")
+              Spacer()
+              Text(shared.status).lineLimit(1)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            GroupBox("Sensor Dust Test") {
+              VStack(alignment: .leading, spacing: 10) {
+                Text("Run Dust Delete Data on the camera, then take a new JPEG photograph. Select that JPEG to examine its metadata.")
+                  .font(.callout)
+                HStack {
+                  Button("Choose JPEG…") { chooseJPEG() }
+                  if !selectedJPEG.isEmpty {
+                    Text(selectedJPEG).lineLimit(1).truncationMode(.middle)
+                      .foregroundStyle(.secondary)
+                  }
+                  Spacer()
                 }
-                if let ptpInterface {
-                  field("Interface", "\(ptpInterface.number) · \(ptpInterface.endpointCount) endpoints")
-                  field("Exclusive USB owner", ptpInterface.owner ?? "None reported")
+                Text(jpegStatus).font(.caption).foregroundStyle(.secondary)
+                  .textSelection(.enabled)
+                if let report = dustReport {
+                  HStack(spacing: 20) {
+                    Text("Total: \(report.count)").bold()
+                    Text("Large: \(report.large)")
+                    Text("Medium: \(report.medium)")
+                    Text("Small: \(report.small)")
+                  }
+                  .font(.callout)
+                  Text("Size groups are provisional, based on Canon's recorded spot-size values. Compare new results after repeating Dust Delete Data on the camera.")
+                    .font(.caption).foregroundStyle(.secondary)
                 }
               }
               .padding(8)
               .frame(maxWidth: .infinity, alignment: .leading)
             }
-            DisclosureGroup("Diagnostics", isExpanded: $showDiagnostics) {
-              VStack(alignment: .leading, spacing: 12) {
-                if let ptpInterface {
-                  Button("Test USB Access") { testUSB(ptpInterface.id) }.disabled(isReading)
-                }
-                diagnostic("USB access", usbTest)
-                diagnostic("PTP DeviceInfo", deviceInfo)
-                diagnostic("PTP properties", properties)
-                diagnostic("Canon EOS events", eosEvents)
-              }
-              .padding(.top, 8)
-            }
-            .padding(10)
           }
           .padding(.vertical, 4)
         }
       }
-      Text("Last scan: \(lastScan.formatted(date: .omitted, time: .standard)) · Reading EOS events temporarily enables remote/event mode.")
-        .font(.caption).foregroundStyle(.secondary)
     }
     .padding(20)
     .frame(minWidth: 720, minHeight: 540)
-    .onAppear(perform: refresh)
+    .onAppear { shared.start() }
+    .onDisappear { shared.stop() }
   }
 
   private var ownerEditor: some View {
@@ -142,7 +150,7 @@ struct ContentView: View {
         Button("Save") { saveOwner() }
           .buttonStyle(.borderedProminent)
           .disabled(!canSaveOwner || isReading)
-        Button("Cancel") { editingOwner = false; ownerStatus = nil }
+        Button("Cancel") { editingOwner = false; shared.ownerStatus = "" }
           .disabled(isReading)
       } else {
         Text(value(after: "OWNER NAME:", in: eosEvents) ?? "Not yet read")
@@ -150,10 +158,10 @@ struct ContentView: View {
         Button("Edit") {
           ownerDraft = value(after: "OWNER NAME:", in: eosEvents) ?? ""
           if ownerDraft == "Not available" { ownerDraft = "" }
-          ownerStatus = nil
+          shared.ownerStatus = ""
           editingOwner = true
         }
-        .disabled(isReading || ptpInterface == nil || eosEvents.isEmpty)
+        .disabled(isReading || camera == nil || eosEvents.isEmpty)
       }
       Spacer(minLength: 0)
     }
@@ -168,73 +176,34 @@ struct ContentView: View {
     LabeledContent(name, value: value)
       .textSelection(.enabled)
   }
-  @ViewBuilder private func diagnostic(_ name: String, _ output: String) -> some View {
-    if !output.isEmpty {
-      VStack(alignment: .leading, spacing: 4) {
-        Text(name).font(.headline)
-        Text(output).font(.system(.caption, design: .monospaced))
-          .textSelection(.enabled)
-          .frame(maxWidth: .infinity, alignment: .leading)
-      }
-    }
-  }
   private func value(after prefix: String, in text: String) -> String? {
     text.split(separator: "\n").first(where: { $0.hasPrefix(prefix) })
       .map { String($0.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces) }
   }
-  private func refresh() {
-    devices = CanonUSBDiscovery.scan()
-    lastScan = Date()
-    deviceInfo = ""
-    properties = ""
-    eosEvents = ""
-    usbTest = ""
-    editingOwner = false
-    ownerStatus = nil
+  private func chooseJPEG() {
+    let panel = NSOpenPanel()
+    panel.allowedContentTypes = [.jpeg]
+    panel.allowsMultipleSelection = false
+    panel.canChooseDirectories = false
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    selectedJPEG = url.lastPathComponent
+    dustReport = nil
+    do {
+      let report = try CanonDustData.read(url)
+      dustReport = report
+      jpegStatus = "Canon Dust Delete Data found (\(report.rawBytes) bytes)."
+    } catch {
+      jpegStatus = error.localizedDescription
+    }
   }
   private func readCamera() {
-    guard let id = ptpInterface?.id else { return }
-    isReading = true
     editingOwner = false
-    ownerStatus = nil
-    Task {
-      // Separate sessions: the proven readers each open and close their own interface.
-      deviceInfo = await CanonPTP.getDeviceInfo(registryID: id)
-      properties = await CanonPTPSession.inspect(registryID: id)
-      eosEvents = await CanonPTPEOSEvents.read(registryID: id)
-      isReading = false
-    }
+    shared.readCamera()
   }
   private func saveOwner() {
-    guard let id = ptpInterface?.id else { return }
-    let newName = ownerDraft
-    isReading = true
-    ownerStatus = "Saving and verifying on camera…"
-    Task {
-      let result = await CanonPTPEOSEvents.writeOwner(registryID: id, name: newName)
-      ownerStatus = result.message
-      if result.success {
-        editingOwner = false
-        let refreshed = await CanonPTPEOSEvents.read(registryID: id)
-        if value(after: "OWNER NAME:", in: refreshed) == newName {
-          ownerStatus = "Owner name saved and verified on the camera."
-        } else {
-          ownerStatus = result.message
-        }
-        eosEvents = refreshed
-      }
-      isReading = false
-    }
+    shared.saveOwner(ownerDraft)
+    editingOwner = false
   }
-
-  private func testUSB(_ id: UInt64) {
-    isReading = true
-    Task {
-      usbTest = CanonUSBAccess.test(registryID: id)
-      isReading = false
-    }
-  }
-  
   private func hex(_ value: Int, digits: Int = 4) -> String {
     String(format: "0x%0*X", digits, value)
   }
