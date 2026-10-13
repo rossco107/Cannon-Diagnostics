@@ -130,7 +130,7 @@ final class CanonSharedPTP: NSObject, ObservableObject, ICDeviceBrowserDelegate 
     var nickname: String?
     var shutter: UInt32?
     var shots: UInt32?
-    var serial: UInt32?
+    var serial: String?
     var battery: UInt32?
     do {
       let r = try await execute(camera, 0x9114, [1])
@@ -185,7 +185,7 @@ final class CanonSharedPTP: NSObject, ObservableObject, ICDeviceBrowserDelegate 
     lines.append("OWNER NAME: " + (owner ?? "Not available"))
     lines.append("CAMERA NICKNAME: " + (nickname ?? "Not available"))
     lines.append("AVAILABLE SHOTS: " + (shots.map(String.init) ?? "Not available"))
-    lines.append("EOS SERIAL RAW: " + (serial.map { String(format: "0x%08X", $0) } ?? "Not available"))
+    lines.append("EOS SERIAL RAW: " + (serial ?? "Not available"))
     lines.append("EOS BATTERY RAW: " + (battery.map(String.init) ?? "Not available"))
     return lines.joined(separator: "\n")
   }

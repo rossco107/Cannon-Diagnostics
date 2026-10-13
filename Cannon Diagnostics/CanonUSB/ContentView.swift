@@ -82,7 +82,7 @@ struct ContentView: View {
               VStack(alignment: .leading, spacing: 11) {
                 field("Shutter count", shutterCount == "—" ? "Not yet read" : "\(shutterCount) actuations")
                 field("Manufacturer", manufacturer)
-                field("Canon serial (raw)", eosSerial)
+                field("Canon serial number", eosSerial)
                 field("PTP serial number", serialNumber)
                 field("Shots remaining", availableShots)
                 field("Firmware", firmware.replacingOccurrences(of: "3-", with: ""))

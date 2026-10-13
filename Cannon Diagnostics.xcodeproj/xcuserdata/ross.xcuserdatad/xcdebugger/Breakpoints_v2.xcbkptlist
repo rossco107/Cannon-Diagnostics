@@ -34,36 +34,6 @@
             endingLineNumber = "340"
             landmarkName = "readArray()"
             landmarkType = "9">
-            <Locations>
-               <Location
-                  uuid = "63B90ABC-A373-4D83-92B5-9C58CA68F3F1 - 6bb107dacabba297"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "Cannon_Diagnostics.CanonSharedPTP.saveOwner(Swift.String) -&gt; ()"
-                  moduleName = "Cannon Diagnostics.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/ross/sources/Cannon%20Diagnostics/Cannon%20Diagnostics/CanonUSB/CanonSharedPTP.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "340"
-                  endingLineNumber = "340">
-               </Location>
-               <Location
-                  uuid = "63B90ABC-A373-4D83-92B5-9C58CA68F3F1 - 6522a86f2b0612e5"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "readArray() -&gt; Swift.Optional&lt;Swift.Array&lt;Swift.UInt16&gt;&gt;"
-                  moduleName = "Cannon Diagnostics.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/ross/sources/Cannon%20Diagnostics/Cannon%20Diagnostics/CanonUSB/CanonSharedPTP.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "324"
-                  endingLineNumber = "324">
-               </Location>
-            </Locations>
          </BreakpointContent>
       </BreakpointProxy>
    </Breakpoints>

@@ -1,7 +1,7 @@
 import Foundation
 
 enum CanonEOSEventDecoder {
-  static func parse(_ data: Data) -> (lines: [String], shutterCount: UInt32?, owner: String?, nickname: String?, eventCount: Int, availableShots: UInt32?, eosSerial: UInt32?, batteryPower: UInt32?) {
+  static func parse(_ data: Data) -> (lines: [String], shutterCount: UInt32?, owner: String?, nickname: String?, eventCount: Int, availableShots: UInt32?, eosSerial: String?, batteryPower: UInt32?) {
     var lines: [String] = []
     var offset = 0
     var count = 0
@@ -9,7 +9,7 @@ enum CanonEOSEventDecoder {
     var owner: String?
     var nickname: String?
     var shots: UInt32?
-    var serial: UInt32?
+    var serial: String?
     var battery: UInt32?
     var otherEvents = 0
     while offset + 8 <= data.count && count < 512 {
@@ -26,22 +26,24 @@ enum CanonEOSEventDecoder {
         if property == 0xD1AC && size >= 16 {
           shutter = u32(data, offset + 12)
           lines.append("EOS shutter-counter property 0xD1AC: \(shutter!)")
-        } else if (property == 0xD11B || property == 0xD1AF || property == 0xD111) && size >= 16 {
+        } else if (property == 0xD11B || property == 0xD111) && size >= 16 {
           let value = u32(data, offset + 12)
           switch property {
           case 0xD11B: shots = value; lines.append("EOS available shots 0xD11B: \(value)")
-          case 0xD1AF: serial = value; lines.append(String(format: "EOS serial 0xD1AF raw: 0x%08X", value))
           default: battery = value; lines.append("EOS battery power 0xD111 raw: \(value)")
           }
-        } else if property == 0xD115 || property == 0xD125 {
+        } else if property == 0xD115 || property == 0xD125 || property == 0xD1AF {
           let raw = data.subdata(in: (offset + 12)..<(offset + size))
           if let name = decodeEOSString(raw) {
             if property == 0xD115 {
               owner = name
               lines.append("EOS owner property 0xD115: \(name)")
-            } else {
+            } else if property == 0xD125 {
               nickname = name
               lines.append("EOS nickname property 0xD125: \(name)")
+            } else {
+              serial = name
+              lines.append("EOS serial property 0xD1AF: \(name)")
             }
           } else {
             lines.append(String(format: "EOS string property 0x%04X: empty or undecodable (%d bytes)", property, raw.count))
